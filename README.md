@@ -1,5 +1,5 @@
 # simplelog
-A simple log with rotate by day witch golang
+A simple log with rotate by day with golang
 
 ## Installation
 ```go
