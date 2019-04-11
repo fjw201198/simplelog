@@ -214,3 +214,4 @@ write Alert log, only Fatal level NOT print it.
 func (self *Logger) Fatal(f string, args...interface{})
 ```
 write Fatal log, all log level print it.
+**NOTICE** that this function will call os.Exit
