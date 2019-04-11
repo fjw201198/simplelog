@@ -1,6 +1,54 @@
 # simplelog
 An simple log with rotate by day witch golang
 
+## Installation
+```go
+go get -u github.com/fjw201198/simplelog
+```
+
+## Sample
+```go
+package main
+
+import (
+	"github.com/fjw201198/simplelog"
+	"time"
+)
+
+func goooooooo(logger *simplelog.Logger, idx int, ch chan int) {
+	logger.Info("[%d] wwwwwwwhello, world! %s", idx, "testxxxx");
+	logger.Debug("[%d] debug infoxxxxxxxx", idx);
+	logger.Warn("[%d] warn infoxxxxxxxxxxx", idx);
+	logger.Info("[%d]wwwwwwwhello, world! %s", idx, "testxxxx");
+	logger.Debug("[%d]debug infoxxxxxxxx", idx);
+	logger.Warn("[%d]warn infoxxxxxxxxxxx", idx);
+	ch <- 1;
+}
+
+func main() {
+	// simplelog.SetCached(false);
+	defer simplelog.ExitHook();
+	var logger = simplelog.GetLogger("testlog");
+	// logger.SetPrintConsole(true);
+	var ch chan int = make(chan int, 100);
+	for i := 0; i < 100; i++ {
+		go goooooooo(logger, i, ch);
+	}
+	// wait
+	for j := 0; j < 100; j++ {
+		<-ch;
+	}
+	time.Sleep(20000000000); // wait 20 seconds for change system time. for test rotate
+	for i := 0; i < 100; i++ {
+		go goooooooo(logger, i, ch);
+	}
+	// wait
+	for j := 0; j < 100; j++ {
+		<-ch;
+	}
+}
+```
+
 ## APIs
 + Simple Log
   - [simplelog.SetCached(cache bool)](#SetCached)
