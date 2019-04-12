@@ -592,4 +592,5 @@ func (c *logCache) flush(f *os.File) {
 
 	// clear blocks
 	c.head.clear();
+	c.curblock = c.head;
 }
