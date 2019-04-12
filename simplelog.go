@@ -6,8 +6,6 @@ import (
 	"log"
 	"os"
 	"path"
-	"strings"
-	"sync"
 	"time"
 	"unsafe"
 )
@@ -16,21 +14,34 @@ import (
 const (
 	FATAL 	uint32 = 0
 	ALERT 	uint32 = 1
-	ERR		uint32 = 2
+	ERR	uint32 = 2
 	WARN    uint32 = 3
 	INFO    uint32 = 4
 	DEBUG   uint32 = 5
 )
 
 const (
-	BUF_SIZE 	int = 500 			// cache log message 200 records.
+	BUF_SIZE int = 1000 			// cache log message records.
 	BUF_EXPIRES int64 = 1 			// cache log message 1 second.
+	BUF_BLOCK_SIZE = 40960			// block size 40k
 	DFT_LOG_DIR string = "./logs"	// default log directory
 )
 
 type logRecord struct {
 	logtime time.Time;
 	data    string;
+}
+
+type logCacheBlock struct {
+	cache	 []byte;
+	offset   int64;
+	isLast   bool;
+	next	*logCacheBlock;
+}
+
+type logCache struct {
+	head     *logCacheBlock;
+	curblock *logCacheBlock;
 }
 
 type Logger struct {
@@ -40,13 +51,12 @@ type Logger struct {
 	level       uint32;
 	logfile    *os.File;
 	logObj     *log.Logger;
-	lock        sync.Mutex;
 	console     bool;
 	zipped      bool;
 	zipping     bool;
 	zipChan     chan int;
-	/* cache  	 []*logRecord; */
-	cache        []string;
+	cacheLine   int;
+	cache      *logCache;
 };
 
 type logManager struct {
@@ -326,14 +336,13 @@ func (self *Logger) Fatal(f string, args...interface{}) {
 }
 
 func (self *Logger) Write(buf []byte) (int, error) {
-	self.lock.Lock();
-	defer self.lock.Unlock();
+	// self.lock.Lock();
+	// defer self.lock.Unlock();
 	curTime := time.Now();
 
-	// TODO: Notice that here we should make a copy of the buf, for detial info, please visit:
-	// 		 https://go-zh.org/pkg/io/#Writer
-	var sbuf string = fmt.Sprintf("%s %s", FormatLogTime(&curTime), *(*string)(unsafe.Pointer(&buf)));
-	// rec := &logRecord{curTime, sbuf};
+	var timeBuf [24]byte;
+	var timeSlice = timeBuf[0:0];
+	FormatLogTime(&timeSlice, &curTime);
 
 	// check rotate here
 	if (curTime.Day() != self.flushTime.Day()) {
@@ -345,23 +354,54 @@ func (self *Logger) Write(buf []byte) (int, error) {
 		self.flushTime = curTime;
 	}
 	if !GetCached() {
-		// self.logfile.Write(buf);
-		fmt.Fprintf(self.logfile,"%s", sbuf);
+		var strTime = (*(*string)(unsafe.Pointer(&timeSlice)));
+		var strMsg  = (*(*string)(unsafe.Pointer(&buf)));
+		fmt.Fprintf(self.logfile,"%s%s", strTime, strMsg);
 		self.flushTime = curTime;
 		return len(buf), nil;
 	}
-	self.cache =  append(self.cache, sbuf);
-	if (len(self.cache) >= BUF_SIZE) || (curTime.Unix() - self.flushTime.Unix() >= BUF_EXPIRES)  {
+	self.cache.append(timeSlice);
+	self.cache.append(buf);
+	self.cacheLine = self.cacheLine + 1;
+	if (self.cacheLine >= BUF_SIZE) || (curTime.Unix() - self.flushTime.Unix() >= BUF_EXPIRES)  {
 		self.flushCache();
 		self.flushTime = curTime;
 	}
 	return len(buf), nil;
 }
 
-func FormatLogTime(rec *time.Time) string {
-	return fmt.Sprintf("%d-%02d-%02d %02d:%02d:%02d.%03d", rec.Year(),
-		rec.Month(), rec.Day(), rec.Hour(), rec.Minute(),
-		rec.Second(), int(rec.Nanosecond() / 1000000));
+// this function copyed from go log.go package
+func itoa(buf *[]byte, i int, wid int) {
+	// Assemble decimal in reverse order.
+	var b [20]byte
+	bp := len(b) - 1
+	for i >= 10 || wid > 1 {
+		wid--
+		q := i / 10
+		b[bp] = byte('0' + i - q*10)
+		bp--
+		i = q
+	}
+	// i < 10
+	b[bp] = byte('0' + i)
+	*buf = append(*buf, b[bp:]...)
+}
+
+func FormatLogTime(buf *[]byte, rec *time.Time) {
+	itoa(buf, rec.Year(), 4);
+	*buf = append(*buf, '-');
+	itoa(buf, int(rec.Month()), 2);
+	*buf = append(*buf, '-');
+	itoa(buf, int(rec.Day()), 2);
+	*buf = append(*buf, ' ');
+	itoa(buf, rec.Hour(), 2);
+	*buf = append(*buf, ':')
+	itoa(buf, rec.Minute(), 2);
+	*buf = append(*buf, ':');
+	itoa(buf, rec.Second(), 2);
+	*buf = append(*buf, '.');
+	itoa(buf, int(rec.Nanosecond() / 1000000), 3);
+	*buf = append(*buf, ' ');
 }
 
 func (rec *logRecord) String() string {
@@ -393,15 +433,7 @@ func (self *Logger) backupLog() {
 	newPath := path.Join(GetLogDir(), newName);
 	os.Rename(oldName, newPath);
 	if self.zipped {
-		self.zipping = true;
-		go zipLog(newName);
-		self.zipping = false;
-		select {
-		case <- self.zipChan:
-			self.zipChan <-1;
-		default:
-			self.zipChan <-1;
-		}
+		go self.zipLog(newName);
 	}
 }
 
@@ -419,27 +451,27 @@ func newLogger(name string) *Logger {
 	if err == nil {
 		logger.backupLog();
 	}
+	logger.cacheLine = 0;
+	logger.cache = newLogCache();
 	logger.open();
-	// logger.cache = make([]*logRecord, 0, BUF_SIZE);
-	logger.cache = make([]string, 0, BUF_SIZE);
-	/* runtime.SetFinalizer(logger, func(self *Logger) {
-		fmt.Fprintf(os.Stdout, "log destroy...");
-		self.flushCache();
-		// self.logfile.Close();
-	}) */
 	return logger;
 }
 
 func (self *Logger) flushCache() {
-	// fmt.Fprint(self.logfile, self.cache);
-	// for _, rec := range self.cache {
-	//	fmt.Fprint(self.logfile, rec);
-	// }
-	fmt.Fprint(self.logfile, strings.Join(self.cache, ""));
-	self.cache = self.cache[0:0];
+	self.cache.flush(self.logfile);
+	self.cacheLine = 0;
 }
 
-func zipLog(name string) {
+func (self *Logger) zipLog(name string) {
+	self.zipping = true;
+	defer func() {
+		select {
+		case <- self.zipChan:
+			self.zipChan <-1;
+		default:
+			self.zipChan <-1;
+		}
+	}();
 	var err error;
 	var oldDir string;
 	// switch to log directory
@@ -475,7 +507,8 @@ func zipLog(name string) {
 		fmt.Fprintln(os.Stderr,"open rotated file failed.");
 		return;
 	}
-	var fbuf []byte = make([]byte, 40960, 40960);
+	var fbufArr [40960]byte;
+	var fbuf []byte = fbufArr[:];
 	for {
 		var rlen, e = origFd.Read(fbuf);
 		if e != nil || rlen == 0 { break; }
@@ -492,4 +525,71 @@ func zipLog(name string) {
 		fmt.Println(err);
 	}
 	os.Chdir(oldDir);
+}
+
+func newLogCacheBlock() *logCacheBlock {
+	var b *logCacheBlock = new(logCacheBlock);
+	b.cache = make([]byte, 0, BUF_BLOCK_SIZE);
+	b.isLast = true;
+	b.next = nil;
+	return b;
+}
+
+func (b *logCacheBlock) len() int {
+	return len(b.cache);
+}
+
+func (b *logCacheBlock) left() int {
+	return BUF_BLOCK_SIZE - b.len();
+}
+
+func (b *logCacheBlock) write(buf []byte) *logCacheBlock {
+	var leftLen = b.left();
+	var bufLen  = len(buf);
+	var curBlock = b;
+	if leftLen < bufLen {
+		if b.next == nil {
+			b.next = newLogCacheBlock();
+		}
+		b.next.isLast = true;
+		b.isLast = false;
+		curBlock = b.next;
+	}
+	curBlock.cache = append(curBlock.cache, buf...);
+	return curBlock;
+}
+
+func (b *logCacheBlock) clear() {
+	var curBlock = b;
+	for ; curBlock.next != nil; {
+		curBlock.isLast = true;
+		curBlock.cache = curBlock.cache[0:0];
+		curBlock = curBlock.next;
+	}
+}
+
+func newLogCache() *logCache {
+	var c *logCache = new(logCache);
+	c.head = newLogCacheBlock();
+	c.curblock = c.head;
+	return c;
+}
+
+func (c *logCache) append(src []byte) {
+	c.curblock = c.curblock.write(src);
+}
+
+func (c *logCache) flush(f *os.File) {
+	var pb = c.head;
+	for ; pb != nil && !pb.isLast; pb = pb.next {
+		f.Write(pb.cache);
+	}
+
+	// write last block
+	if pb != nil {
+		f.Write(pb.cache);
+	}
+
+	// clear blocks
+	c.head.clear();
 }
