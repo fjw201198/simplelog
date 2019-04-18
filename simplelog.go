@@ -337,6 +337,11 @@ func (self *Logger) Fatal(f string, args ...interface{}) {
 	}
 }
 
+func (self *Logger) Flush() {
+	self.flushCache();
+	self.flushTime = time.Now();
+}
+
 func (self *Logger) Write(buf []byte) (int, error) {
 	// self.lock.Lock();
 	// defer self.lock.Unlock();
