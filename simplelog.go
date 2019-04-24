@@ -456,7 +456,7 @@ func newLogger(name string) *Logger {
 	logger.logObj = log.New(logger, "", 0)
 	_, err := os.Stat(path.Join(GetLogDir(), logger.name+".log"))
 	if err == nil {
-		logger.backupLog()
+		// logger.backupLog()
 	}
 	logger.cacheLine = 0
 	logger.cache = newLogCache()
