@@ -3,9 +3,9 @@ package simplelog
 import (
 	"archive/zip"
 	"fmt"
-	"log"
 	"os"
 	"path"
+	"sync"
 	"time"
 	"unsafe"
 )
@@ -50,13 +50,14 @@ type Logger struct {
 	name      string
 	level     uint32
 	logfile   *os.File
-	logObj    *log.Logger
+	// logObj    *log.Logger
 	console   bool
 	zipped    bool
 	zipping   bool
 	zipChan   chan int
 	cacheLine int
 	cache     *logCache
+	lock      sync.Mutex
 }
 
 type logManager struct {
@@ -250,7 +251,8 @@ func (self *Logger) Debug(f string, args ...interface{}) {
 		fmt.Fprintf(os.Stdout, fff, args...)
 	}
 	if self.level >= DEBUG {
-		self.logObj.Printf(fff, args...)
+		// self.logObj.Printf(fff, args...)
+		self.WriteData(fff, args...);
 	}
 }
 
@@ -266,7 +268,8 @@ func (self *Logger) Info(f string, args ...interface{}) {
 		fmt.Fprintf(os.Stdout, fff, args...)
 	}
 	if self.level >= INFO {
-		self.logObj.Printf(fff, args...)
+		// self.logObj.Printf(fff, args...)
+		self.WriteData(fff, args...);
 	}
 }
 
@@ -282,7 +285,8 @@ func (self *Logger) Warn(f string, args ...interface{}) {
 		fmt.Fprintf(os.Stderr, fff, args...)
 	}
 	if self.level >= WARN {
-		self.logObj.Printf(fff, args...)
+		// self.logObj.Printf(fff, args...)
+		self.WriteData(fff, args...);
 	}
 }
 
@@ -298,7 +302,8 @@ func (self *Logger) Err(f string, args ...interface{}) {
 		fmt.Fprintf(os.Stderr, fff, args...)
 	}
 	if self.level >= ERR {
-		self.logObj.Printf(fff, args...)
+		// self.logObj.Printf(fff, args...)
+		self.WriteData(fff, args...);
 	}
 }
 
@@ -314,7 +319,8 @@ func (self *Logger) Alert(f string, args ...interface{}) {
 		fmt.Fprintf(os.Stderr, fff, args...)
 	}
 	if self.level >= ALERT {
-		self.logObj.Printf(fff, args...)
+		// self.logObj.Printf(fff, args...)
+		self.WriteData(fff, args...);
 	}
 }
 
@@ -333,7 +339,9 @@ func (self *Logger) Fatal(f string, args ...interface{}) {
 		fmt.Fprintf(os.Stderr, fff, args...)
 	}
 	if self.level >= FATAL {
-		self.logObj.Fatalf(fff, args...)
+		// self.logObj.Fatalf(fff, args...)
+		self.WriteData(fff, args...);
+		os.Exit(0);
 	}
 }
 
@@ -375,6 +383,39 @@ func (self *Logger) Write(buf []byte) (int, error) {
 		self.flushTime = curTime
 	}
 	return len(buf), nil
+}
+
+func (self *Logger) WriteData(fff string, args...interface{}) {
+	self.lock.Lock();
+	defer self.lock.Unlock();
+	curTime := time.Now()
+
+	var timeBuf [24]byte
+	var timeSlice = timeBuf[0:0]
+	FormatLogTime(&timeSlice, &curTime)
+
+	// check rotate here
+	if curTime.Day() != self.flushTime.Day() {
+		// ROTATE log
+		self.flushCache()
+		self.logfile.Close()
+		self.backupLog()
+		self.open()
+		self.flushTime = curTime
+	}
+	var strTime = (*(*string)(unsafe.Pointer(&timeSlice)))
+	if !GetCached() {
+		fmt.Fprintf(self.logfile, strTime + " " + fff, args...)
+		self.flushTime = curTime
+		return;
+	}
+	fmt.Fprintf(self.cache, "%s ", strTime)
+	fmt.Fprintf(self.cache, fff, args...);
+	self.cacheLine = self.cacheLine + 1
+	if (self.cacheLine >= BUF_SIZE) || (curTime.Unix()-self.flushTime.Unix() >= BUF_EXPIRES) {
+		self.flushCache()
+		self.flushTime = curTime
+	}
 }
 
 // this function copyed from go log.go package
@@ -453,7 +494,7 @@ func newLogger(name string) *Logger {
 	logger.zipped = true
 	logger.zipping = false
 	logger.zipChan = make(chan int, 1)
-	logger.logObj = log.New(logger, "", 0)
+	// logger.logObj = log.New(logger, "", 0)
 	_, err := os.Stat(path.Join(GetLogDir(), logger.name+".log"))
 	if err == nil {
 		// logger.backupLog()
@@ -556,6 +597,7 @@ func (b *logCacheBlock) write(buf []byte) *logCacheBlock {
 	var leftLen = b.left()
 	var bufLen = len(buf)
 	var curBlock = b
+	// TODO: here need loop, but normally, buf is less than BUF_BLOCK_SIZE
 	if leftLen < bufLen {
 		if b.next == nil {
 			b.next = newLogCacheBlock()
@@ -590,6 +632,11 @@ func newLogCache() *logCache {
 
 func (c *logCache) append(src []byte) {
 	c.curblock = c.curblock.write(src)
+}
+
+func (c *logCache) Write(src []byte) (n int, e error) {
+	c.append(src);
+	return len(src), nil;
 }
 
 func (c *logCache) flush(f *os.File) {
