@@ -3,6 +3,7 @@ package simplelog
 import (
 	"archive/zip"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"sync"
@@ -228,7 +229,7 @@ func (self *Logger) GetZip() bool {
  * wait for zip complete before the program closed.
  */
 func (self *Logger) WaitForZipComplete() {
-	if !self.zipped || !self.zipping {
+	if !self.zipped {
 		return
 	}
 	for {
@@ -252,7 +253,7 @@ func (self *Logger) Debug(f string, args ...interface{}) {
 	}
 	if self.level >= DEBUG {
 		// self.logObj.Printf(fff, args...)
-		self.WriteData(fff, args...);
+		self.WriteData(fff, args...)
 	}
 }
 
@@ -269,7 +270,7 @@ func (self *Logger) Info(f string, args ...interface{}) {
 	}
 	if self.level >= INFO {
 		// self.logObj.Printf(fff, args...)
-		self.WriteData(fff, args...);
+		self.WriteData(fff, args...)
 	}
 }
 
@@ -286,7 +287,7 @@ func (self *Logger) Warn(f string, args ...interface{}) {
 	}
 	if self.level >= WARN {
 		// self.logObj.Printf(fff, args...)
-		self.WriteData(fff, args...);
+		self.WriteData(fff, args...)
 	}
 }
 
@@ -303,7 +304,7 @@ func (self *Logger) Err(f string, args ...interface{}) {
 	}
 	if self.level >= ERR {
 		// self.logObj.Printf(fff, args...)
-		self.WriteData(fff, args...);
+		self.WriteData(fff, args...)
 	}
 }
 
@@ -320,7 +321,7 @@ func (self *Logger) Alert(f string, args ...interface{}) {
 	}
 	if self.level >= ALERT {
 		// self.logObj.Printf(fff, args...)
-		self.WriteData(fff, args...);
+		self.WriteData(fff, args...)
 	}
 }
 
@@ -340,14 +341,14 @@ func (self *Logger) Fatal(f string, args ...interface{}) {
 	}
 	if self.level >= FATAL {
 		// self.logObj.Fatalf(fff, args...)
-		self.WriteData(fff, args...);
-		os.Exit(0);
+		self.WriteData(fff, args...)
+		os.Exit(0)
 	}
 }
 
 func (self *Logger) Flush() {
-	self.flushCache();
-	self.flushTime = time.Now();
+	self.flushCache()
+	self.flushTime = time.Now()
 }
 
 func (self *Logger) Write(buf []byte) (int, error) {
@@ -385,9 +386,9 @@ func (self *Logger) Write(buf []byte) (int, error) {
 	return len(buf), nil
 }
 
-func (self *Logger) WriteData(fff string, args...interface{}) {
-	self.lock.Lock();
-	defer self.lock.Unlock();
+func (self *Logger) WriteData(fff string, args ...interface{}) {
+	self.lock.Lock()
+	defer self.lock.Unlock()
 	curTime := time.Now()
 
 	var timeBuf [24]byte
@@ -405,12 +406,12 @@ func (self *Logger) WriteData(fff string, args...interface{}) {
 	}
 	var strTime = (*(*string)(unsafe.Pointer(&timeSlice)))
 	if !GetCached() {
-		fmt.Fprintf(self.logfile, strTime + " " + fff, args...)
+		fmt.Fprintf(self.logfile, strTime+" "+fff, args...)
 		self.flushTime = curTime
-		return;
+		return
 	}
 	fmt.Fprintf(self.cache, "%s ", strTime)
-	fmt.Fprintf(self.cache, fff, args...);
+	fmt.Fprintf(self.cache, fff, args...)
 	self.cacheLine = self.cacheLine + 1
 	if (self.cacheLine >= BUF_SIZE) || (curTime.Unix()-self.flushTime.Unix() >= BUF_EXPIRES) {
 		self.flushCache()
@@ -480,6 +481,7 @@ func (self *Logger) backupLog() {
 		self.flushTime.Month(), self.flushTime.Day(), self.flushTime.Unix())
 	newPath := path.Join(GetLogDir(), newName)
 	os.Rename(oldName, newPath)
+	println(self.zipped)
 	if self.zipped {
 		go self.zipLog(newName)
 	}
@@ -497,7 +499,7 @@ func newLogger(name string) *Logger {
 	// logger.logObj = log.New(logger, "", 0)
 	_, err := os.Stat(path.Join(GetLogDir(), logger.name+".log"))
 	if err == nil {
-		// logger.backupLog()
+		logger.backupLog()
 	}
 	logger.cacheLine = 0
 	logger.cache = newLogCache()
@@ -513,6 +515,7 @@ func (self *Logger) flushCache() {
 func (self *Logger) zipLog(name string) {
 	self.zipping = true
 	defer func() {
+		self.zipping = false
 		select {
 		case <-self.zipChan:
 			self.zipChan <- 1
@@ -529,10 +532,11 @@ func (self *Logger) zipLog(name string) {
 		return
 	}
 	os.Chdir(GetLogDir())
+	defer os.Chdir(oldDir)
 
 	// create zip file
 	var dstFd *os.File
-	dstFd, err = os.OpenFile(name+".zip", os.O_CREATE, 0644)
+	dstFd, err = os.OpenFile(name+".zip", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "open zip file failed.")
 		return
@@ -540,41 +544,46 @@ func (self *Logger) zipLog(name string) {
 
 	// bind the zip file to the zip writer
 	var zipWriter = zip.NewWriter(dstFd)
-
-	// add a file to zip package, and get this files's writer
-	var zipfileItemWriter, errx = zipWriter.Create(name)
-	if errx != nil {
-		fmt.Fprintln(os.Stderr, "add zip file failed")
-		return
-	}
+	defer func() {
+		zipWriter.Close()
+		dstFd.Close()
+	}()
 
 	// writer the file to the zip package's file
 	var origFd *os.File
-	origFd, err = os.OpenFile(name, os.O_RDONLY, 444)
+	origFd, err = os.OpenFile(name, os.O_RDONLY, 0644)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "open rotated file failed.")
+		fmt.Fprintf(os.Stderr, "open rotated file failed: %s\n", err)
 		return
 	}
-	var fbufArr [40960]byte
-	var fbuf []byte = fbufArr[:]
-	for {
-		var rlen, e = origFd.Read(fbuf)
-		if e != nil || rlen == 0 {
-			break
-		}
-		fbuf = fbuf[0:rlen]
-		zipfileItemWriter.Write(fbuf)
+	info, err := origFd.Stat()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return
 	}
-
+	header, err := zip.FileInfoHeader(info)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return
+	}
+	header.Name = name
+	header.Method = zip.Deflate
+	w, err := zipWriter.CreateHeader(header)
+	// w, err := zipWriter.Create(name);
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return
+	}
+	_, err = io.Copy(w, origFd)
 	origFd.Close()
-	zipWriter.Flush()
-	zipWriter.Close()
-	dstFd.Close()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "write file to zip failed: %s\n", err)
+		return
+	}
 	err = os.Remove(name)
 	if err != nil {
-		fmt.Println(err)
+		fmt.Fprintln(os.Stderr, err)
 	}
-	os.Chdir(oldDir)
 }
 
 func newLogCacheBlock() *logCacheBlock {
@@ -618,8 +627,8 @@ func (b *logCacheBlock) clear() {
 		curBlock = curBlock.next
 	}
 	if curBlock != nil {
-		curBlock.isLast = true;
-		curBlock.cache = curBlock.cache[0:0];
+		curBlock.isLast = true
+		curBlock.cache = curBlock.cache[0:0]
 	}
 }
 
@@ -635,8 +644,8 @@ func (c *logCache) append(src []byte) {
 }
 
 func (c *logCache) Write(src []byte) (n int, e error) {
-	c.append(src);
-	return len(src), nil;
+	c.append(src)
+	return len(src), nil
 }
 
 func (c *logCache) flush(f *os.File) {
