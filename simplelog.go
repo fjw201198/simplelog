@@ -481,7 +481,6 @@ func (self *Logger) backupLog() {
 		self.flushTime.Month(), self.flushTime.Day(), self.flushTime.Unix())
 	newPath := path.Join(GetLogDir(), newName)
 	os.Rename(oldName, newPath)
-	println(self.zipped)
 	if self.zipped {
 		go self.zipLog(newName)
 	}

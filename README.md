@@ -68,6 +68,7 @@ func main() {
   - [(*Logger) SetZip(zipped bool)](#SetZip)
   - [(*Logger) GetZip() bool](#GetZip)
   - [(*Logger) WaitForZipComplete()](#WaitForZipComplete)
+  - [(*Logger) Flush()](#Flush)
   - [(*Logger) Debug(format string, args...interface{})](#Debug)
   - [(*Logger) Info(format string, args...interface{})](#Info)
   - [(*Logger) Warn(format string, args...interface{})](#Warn)
@@ -192,37 +193,43 @@ func (self *Logger) WaitForZipComplete()
 ```
 wait for zip complete before the program closed.
 
-18. <a name="Debug">Debug</a>
+18. <a name="Flush">Flush</a>
+```go
+func (self *Logger) Flush()
+```
+flush log to disk.
+
+19. <a name="Debug">Debug</a>
 ```go
 func (self *Logger) Debug(f string, args...interface{})
 ```
 write debug log, only debug level print it.
 
-19. <a name="Info">Info</a>
+20. <a name="Info">Info</a>
 ```go
 func (self *Logger) Info(f string, args...interface{})
 ```
 write info log, only INFO and DEBUG level print it.
 
-20. <a name="Warn">Warn</a>
+21. <a name="Warn">Warn</a>
 ```go
 func (self *Logger) Warn(f string, args...interface{})
 ```
 write warn log, only INFO and DEBUG, WARN level print it.
 
-21. <a name="Err">Err</a>
+22. <a name="Err">Err</a>
 ```go
 func (self *Logger) Err(f string, args...interface{})
 ```
 write error log, only WARN, ERR, INFO and DEBUG level print it.
 
-22. <a name="Alert">Alert</a>
+23. <a name="Alert">Alert</a>
 ```go
 func (self *Logger) Alert(f string, args...interface{})
 ```
 write Alert log, only Fatal level NOT print it.
 
-23. <a name="Fatal">Fatal</a>
+24. <a name="Fatal">Fatal</a>
 ```go
 func (self *Logger) Fatal(f string, args...interface{})
 ```
