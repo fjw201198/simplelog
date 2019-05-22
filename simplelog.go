@@ -1,3 +1,5 @@
+// package simplelog defined some convince method process log, by default,
+// this package provides log cache, rotate (by day) and zip.
 package simplelog
 
 import (
@@ -346,6 +348,10 @@ func (self *Logger) Fatal(f string, args ...interface{}) {
 	}
 }
 
+/**
+ * void Logger::Flush()
+ * flush log cache to disk
+ */
 func (self *Logger) Flush() {
 	self.flushCache()
 	self.flushTime = time.Now()
